@@ -10,7 +10,6 @@ import { z }                   from 'zod';
 import {
   generateColorRamp,
   generateColorRampWithCurve,
-  uniqueRandomHues,
   colorUtils,
   utils,
 }                              from 'rampensau';
@@ -19,6 +18,7 @@ const {
   colorToCSS,
   harveyHue,
   colorHarmonies,
+  uniqueRandomHues,
 } = colorUtils;
 
 const {
