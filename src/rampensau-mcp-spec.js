@@ -13,10 +13,10 @@ import {
   uniqueRandomHues,
 }                              from 'rampensau';
 
-import { colorHarmonies }      from 'rampensau/hueGeneration';
 import {
   colorToCSS,
   harveyHue,
+  colorHarmonies,
 }                              from 'rampensau/colorUtils';
 
 import {
