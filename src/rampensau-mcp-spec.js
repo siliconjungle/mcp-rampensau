@@ -11,21 +11,23 @@ import {
   generateColorRamp,
   generateColorRampWithCurve,
   uniqueRandomHues,
+  colorUtils,
+  utils,
 }                              from 'rampensau';
 
-import {
+const {
   colorToCSS,
   harveyHue,
   colorHarmonies,
-}                              from 'rampensau/colorUtils';
+} = colorUtils;
 
-import {
+const {
   shuffleArray,
   lerp,
   scaleSpreadArray,
   pointOnCurve,
   makeCurveEasings,
-}                              from 'rampensau/utils';
+} = utils;
 
 /* ───────── helpers ─────────────────────────────────────────────── */
 const asResult = (data) => ({
