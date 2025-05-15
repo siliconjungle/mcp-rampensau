@@ -1,0 +1,20 @@
+{
+  "name": "mcp-rampensau",
+  "version": "0.1.0",
+  "description": "MCP server that procedurally generates color palettes.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "mcp-rampensau": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.2",
+    "nanoid": "^5.1.5",
+    "rampensau": "^2.1.0",
+    "zod": "^3.22.4",
+    "zod-to-json-schema": "^3.23.5"
+  }
+}
