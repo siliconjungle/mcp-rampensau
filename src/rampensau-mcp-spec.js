@@ -1,4 +1,4 @@
-/* rampensau.mcp.js – alias-friendly, self-documenting API
+/* rampensau.mcp.js – bullet-proof wrapper
    --------------------------------------------------------------- */
 import { nanoid } from 'nanoid';
 import { z }      from 'zod';
@@ -13,185 +13,164 @@ const { colorToCSS, harveyHue, colorHarmonies, uniqueRandomHues } = colorUtils;
 const { shuffleArray, lerp, scaleSpreadArray, pointOnCurve, makeCurveEasings } = utils;
 
 /* ───────── helpers ───────────────────────────────────────────── */
-const asResult = (data) => ({
+const asResult = (x) => ({
   content: [{
-    type : 'text',
-    text : typeof data === 'string'
-      ? data
-      : JSON.stringify(data, null, 2),
+    type: 'text',
+    text: typeof x === 'string' ? x : JSON.stringify(x, null, 2),
   }],
 });
 
-/* 0-1  or  0-100  ➜  0-1 */
+/* 0-1 or 0-100 ➜ 0-1 ------------------------------------------- */
 const norm01 = z.number()
-  .refine((v) => v >= 0 && v <= 100, 'must be between 0 and 100')
+  .refine((v) => v >= 0 && v <= 100, 'must be 0…100')
   .transform((v) => (v > 1 ? v / 100 : v));
 
-const RangeTuple = z
-  .tuple([norm01, norm01])
-  .describe('min/max (0–1 or 0–100)');
+const Range = z.tuple([norm01, norm01]).describe('min/max (0-1 or 0-100)');
 
 /* ───────── shared option shapes ──────────────────────────────── */
 const RampBase = {
-  total       : z.number().int().min(3)
-                 .describe('How many swatches.').default(10),
-
-  hStart      : z.number().min(0).max(360)
-                 .describe('Starting hue (°).').optional(),
-
-  hStartCenter: norm01.describe('Randomise first hue by ± this fraction of 360°')
-                 .optional(),
-
-  hCycles     : z.number().min(1)
-                 .describe('Number of hue wraps.').default(1).optional(),
-
+  total       : z.number().int().min(3).describe('Swatch count').default(10),
+  hStart      : z.number().min(0).max(360).describe('Start hue (°)').optional(),
+  hStartCenter: norm01.describe('±start hue jitter').optional(),
+  hCycles     : z.number().min(1).describe('Hue wraps').default(1).optional(),
   hueList     : z.array(z.number().min(0).max(360))
-                 .describe('Explicit list of hues. Overrides hStart / cycles.')
-                 .optional(),
-
-  sRange      : RangeTuple.optional()
-                 .describe('Saturation range. Ex: [0.7,1] or [70,100]'),
-
-  lRange      : RangeTuple.optional()
-                 .describe('Lightness range. Ex: [0.2,0.4] or [20,40]'),
+                 .describe('Explicit hues – overrides hStart/cycles').optional(),
+  sRange      : Range.optional().describe('Saturation range'),
+  lRange      : Range.optional().describe('Lightness range'),
 };
 
-const CurveExtra = {
-  curveMethod : z.enum(['lamé', 'sine', 'power', 'linear'])
-                 .describe('Curve algorithm for easing.').optional(),
-  curveAccent : z.number().min(0).max(5)
-                 .describe('Accent strength for curveMethod.').optional(),
+/* real RampenSau accents + user-friendly aliases → accent map */
+const ACCENT_ALIASES = {
+  lamé     : 'lamé',
+  lame     : 'lamé',
+  arc      : 'arc',
+  linear   : 'arc',
+  sine     : 'arc',
+  easeInOut: 'arc',
+  pow      : 'pow',
+  power    : 'pow',
+  powx     : 'powX',
+  powy     : 'powY',
 };
 
-/* Accept array / css-hsl / css-oklch / css (alias → css-hsl) */
-const Format = z
-  .enum(['array', 'css-hsl', 'css-oklch', 'css'])
+const CurveOpts = {
+  curveAccent: z.enum(Object.keys(ACCENT_ALIASES) as [keyof typeof ACCENT_ALIASES])
+                .describe('Curve accent (aliases allowed)').optional(),
+};
+
+/* format -------------------------------------------------------- */
+const Format = z.enum(['array', 'css-hsl', 'css-oklch', 'css'])
   .default('array')
   .transform((f) => (f === 'css' ? 'css-hsl' : f))
-  .describe('Output format: raw array, css-hsl, css-oklch (css = css-hsl)');
+  .describe('Output: array | css-hsl | css-oklch | css(alias)');
 
 const FormatOpt = { format: Format.optional() };
+
+/* colour (single or palette) ----------------------------------- */
+const Color3  = z.array(z.number()).length(3);
+const Palette = z.union([Color3, z.array(Color3)]);
 
 /* ───────── spec object ───────────────────────────────────────── */
 export const rampensauSpec = {
   id         : 'rampensau',
   instanceId : nanoid(),
-  description: 'Colour-ramp generation & utilities from RampenSau.',
+  description: 'Colour-ramp generation + helpers (RampenSau).',
 
   tools: [
-    /* 1 · generate palette -------------------------------------- */
+    /* ── 1 · generate ─────────────────────────────────────────── */
     {
       name       : 'generate',
-      description: 'Generate a colour ramp / palette.',
-      parameters : { ...RampBase, ...CurveExtra, ...FormatOpt },
+      description: 'Create a colour ramp / palette.',
+      parameters : { ...RampBase, ...CurveOpts, ...FormatOpt },
       examples   : [
-        { total: 8, hStart: 220, sRange: [70,100], lRange: [20,40] },
-        { total: 5, hCycles: 2, curveMethod: 'sine', format: 'css-hsl' },
-        { total: 5, hueList: [120,140,160,180,200], format: 'css' },
+        { total: 5, hStart: 210, sRange: [60,100], lRange: [40,80], curveAccent: 'easeInOut', format: 'css' },
+        { hueList: [120,160,200], format: 'array' },
       ],
       async execute(raw) {
-        /* validate + alias handling */
-        const parsed = z.object(this.parameters).parse(raw);
-        const { format = 'array', curveMethod, ...opts } = parsed;
+        const { format = 'array', curveAccent, ...opts } =
+              z.object(this.parameters).parse(raw);
 
-        const ramp = curveMethod
-          ? generateColorRampWithCurve({ ...opts, curveMethod })
+        const accent = curveAccent ? ACCENT_ALIASES[curveAccent] : undefined;
+        const ramp   = accent
+          ? generateColorRampWithCurve({ ...opts, curveAccent: accent })
           : generateColorRamp(opts);
 
-        const out =
-          format === 'array'
-            ? ramp
-            : ramp.map((c) =>
-                colorToCSS(c, format === 'css-hsl' ? 'hsl' : 'oklch'),
-              );
+        const out = format === 'array'
+          ? ramp
+          : ramp.map((c) => colorToCSS(c, format === 'css-hsl' ? 'hsl' : 'oklch'));
 
         return asResult(out);
       },
     },
 
-    /* 2 · uniqueRandomHues -------------------------------------- */
+    /* ── 2 · toCSS (single OR palette) ────────────────────────── */
     {
-      name       : 'uniqueRandomHues',
-      description: 'Generate unique random hues.',
+      name       : 'toCSS',
+      description: 'Convert colour(s) to CSS strings.',
       parameters : {
-        startHue        : z.number().min(0).max(360)
-                           .describe('Central hue.').optional(),
-        total           : z.number().int().min(1)
-                           .describe('Quantity.').default(5).optional(),
-        minHueDiffAngle : z.number().min(0).max(360)
-                           .describe('Min separation (°).').optional(),
+        color: Palette.describe('[h,s,l] or array of them'),
+        mode : z.enum([
+          'hsl','hsv','lch','oklch',
+          'css','css-hsl','css-hsv','css-lch','css-oklch',
+        ]).default('oklch')
+          .transform((m) => ({
+            'css':'hsl','css-hsl':'hsl','css-hsv':'hsv',
+            'css-lch':'lch','css-oklch':'oklch',
+          }[m] ?? m))
+          .describe('CSS colour-space (aliases ok)'),
       },
-      async execute(args) {
-        const opts = z.object(this.parameters).parse(args);
-        return asResult(uniqueRandomHues(opts));
+      async execute({ color, mode }) {
+        const toCss = (c) => colorToCSS(c, mode);
+        const res   = Array.isArray(color[0]) ? color.map(toCss) : toCss(color);
+        return asResult(res);
       },
     },
 
-    /* 3 · colorHarmony ----------------------------------------- */
+    /* ── 3 · colorHarmony ─────────────────────────────────────── */
     {
       name       : 'colorHarmony',
-      description: 'Return harmony hues.',
+      description: 'Return harmonic hues.',
       parameters : {
         method : z.enum([
-          'complementary', 'splitComplementary', 'triadic',
-          'tetradic', 'monochromatic', 'doubleComplementary',
-          'compound', 'analogous',
-        ]).describe('Harmony type.'),
-        baseHue: z.number().min(0).max(360).describe('Base hue (°).'),
+          'complementary','splitComplementary','triadic','tetradic',
+          'monochromatic','doubleComplementary','compound','analogous',
+        ]),
+        baseHue: z.number().min(0).max(360),
       },
       async execute({ method, baseHue }) {
         return asResult(colorHarmonies[method](baseHue));
       },
     },
 
-    /* 4 · toCSS ------------------------------------------------- */
+    /* ── 4 · uniqueRandomHues ─────────────────────────────────── */
     {
-      name       : 'toCSS',
-      description: 'Convert [h,s,l] → CSS string.',
+      name       : 'uniqueRandomHues',
+      description: 'Generate unique random hues.',
       parameters : {
-        color: z.array(z.number()).length(3)
-                 .describe('[h, s, l] from RampenSau'),
-        mode : z
-          .enum([
-            'hsl', 'hsv', 'lch', 'oklch',
-            'css', 'css-hsl', 'css-hsv', 'css-lch', 'css-oklch',
-          ])
-          .default('oklch')
-          .transform((m) => {
-            if (m === 'css' || m === 'css-hsl') return 'hsl';
-            if (m === 'css-hsv')                return 'hsv';
-            if (m === 'css-lch')                return 'lch';
-            if (m === 'css-oklch')              return 'oklch';
-            return m;
-          })
-          .describe('Output space (aliases allowed).')
-          .optional(),
+        startHue        : z.number().min(0).max(360).optional(),
+        total           : z.number().int().min(1).default(5).optional(),
+        minHueDiffAngle : z.number().min(0).max(360).optional(),
       },
-      async execute({ color, mode }) {
-        return asResult(colorToCSS(color, mode));
+      async execute(args) {
+        return asResult(uniqueRandomHues(z.object(this.parameters).parse(args)));
       },
     },
 
-    /* 5 · harveyHue -------------------------------------------- */
+    /* ── 5 · harveyHue ────────────────────────────────────────── */
     {
       name       : 'harveyHue',
       description: 'Perceptually even hue warp.',
-      parameters : { h: z.number().min(0).max(360).describe('Hue (°).') },
-      async execute({ h }) {
-        return asResult(harveyHue(h));
-      },
+      parameters : { h: z.number().min(0).max(360) },
+      async execute({ h }) { return asResult(harveyHue(h)); },
     },
 
-    /* 6 · utils ------------------------------------------------- */
+    /* ── 6 · utils (unchanged) ─────────────────────────────────- */
     {
       name       : 'utils',
       description: 'Expose RampenSau utility helpers.',
       parameters : {
-        fn   : z.enum([
-          'shuffle', 'lerp', 'scaleSpread', 'curvePoint', 'curveEasings',
-        ]).describe('Utility name.'),
-        args : z.array(z.any()).optional()
-                 .describe('Arguments for fn.'),
+        fn   : z.enum(['shuffle','lerp','scaleSpread','curvePoint','curveEasings']),
+        args : z.array(z.any()).optional(),
       },
       async execute({ fn, args = [] }) {
         const map = {
